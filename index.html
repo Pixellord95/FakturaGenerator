@@ -316,7 +316,7 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
    <div class="tab-panel" id="tab-design">
     <div class="slabel">Snabbfärger</div>
     <div class="theme-grid" id="theme-grid"></div>
-    <div class="slabel">Mallar <span class="tag" onclick="saveMall()">+ spara mall</span></div>
+    <div class="slabel">Mallar <span class="tag" onclick="saveMall()">+ spara mall</span> <span class="tag" onclick="importMall()">↑ importera</span></div>
     <div id="mall-list" style="margin-bottom:8px"></div>
     <div class="slabel">Färger</div>
     <div class="color-row"><label>Accentfärg</label><input type="color" id="c-accent" value="#2a6496" oninput="onChange()"></div>
@@ -362,7 +362,10 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
      <span class="kbd">Ctrl+P</span> Förhandsgranska<br>
      <span class="kbd">Del</span> Ta bort markerat block
     </div>
-    <button class="add-btn" style="margin-top:14px" onclick="resetLayout()">Återställ layout</button>
+    <div style="display:flex;gap:6px;margin-top:14px">
+     <button class="add-btn" style="flex:1" onclick="resetLayout()">Återställ layout</button>
+     <button class="add-btn" style="flex:1" onclick="resetToDefaultLayout()">Standardmall</button>
+    </div>
    </div>
 
   </div>
@@ -415,7 +418,8 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
 const g = id => document.getElementById(id);
 const fmtDate = s => { if(!s) return '–'; const [y,m,d]=s.split('-'); return `${y}-${m}-${d}`; };
 const CURR = {SEK:{sym:'kr',pos:'after'},EUR:{sym:'€',pos:'before'},USD:{sym:'$',pos:'before'},NOK:{sym:'kr',pos:'after'},DKK:{sym:'kr',pos:'after'},GBP:{sym:'£',pos:'before'}};
-function fmtM(n) { const c=CURR[g('f-currency').value]||CURR.SEK; const s=n.toLocaleString('sv-SE',{minimumFractionDigits:2,maximumFractionDigits:2}); return c.pos==='before'?c.sym+s:s+' '+c.sym; }
+// Pure - accepts currency as parameter, no DOM reads
+function fmtM(n, currency) { const c=CURR[currency||'SEK']||CURR.SEK; const s=n.toLocaleString('sv-SE',{minimumFractionDigits:2,maximumFractionDigits:2}); return c.pos==='before'?c.sym+s:s+' '+c.sym; }
 
 // ── THEMES ──
 const THEMES = [
@@ -532,25 +536,20 @@ function buildBlockToggles() {
   });
 }
 
-function getDesign() {
-  return {
-    accent:g('c-accent').value, text:g('c-text').value, bg:g('c-bg').value,
-    strip:g('c-strip').value, sumbox:g('c-sumbox').value, roweven:g('c-roweven').value,
-    font:g('d-font').value, fs:+g('d-fontsize').value||11, ts:+g('d-titlesize').value||22
-  };
-}
-function resizeCanvas() { const w=+g('d-width').value||794,h=+g('d-height').value||1123; g('invoice-wrap').style.width=w+'px'; g('invoice-wrap').style.height=h+'px'; drawSnapGrid(); }
+// ==========================================
+// ── INVOICE DATA — innehållslager ──
+// ==========================================
 
-function calcTotals() {
+// Ren beräkning — inga DOM-läsningar, tar parametrar
+function calcTotals(itemsArr, discAmt, discPct, reverseCharge) {
   let sub=0; const vatGroups={};
-  const disc=+g('f-discount').value||0, discPct=+g('f-discpct').value||0;
-  const rc=g('f-rc').value==='1';
-  items.forEach(it=>{
+  const disc=discAmt||0, dpct=discPct||0, rc=!!reverseCharge;
+  itemsArr.forEach(it=>{
     const lineNet=(it.price*(1-(it.disc||0)/100))*it.qty;
     sub+=lineNet;
     if(!rc){const v=it.vat||0;vatGroups[v]=(vatGroups[v]||0)+lineNet;}
   });
-  const totalDisc=disc+(sub*discPct/100), subAfterDisc=sub-totalDisc;
+  const totalDisc=disc+(sub*dpct/100), subAfterDisc=sub-totalDisc;
   let totalVat=0;
   const vatRows=Object.keys(vatGroups).sort((a,b)=>b-a).map(rate=>{
     const base=Math.max(0,vatGroups[rate]*(1-totalDisc/Math.max(sub,1)));
@@ -559,66 +558,139 @@ function calcTotals() {
   return{sub,totalDisc,subAfterDisc,vatRows,totalVat,grand:subAfterDisc+totalVat,rc};
 }
 
-function invTypeLabel() { const t=g('f-type').value; return t==='reminder'?'Påminnelsefaktura':t==='credit'?'Kreditfaktura':'Faktura'; }
+// Läser alla fakturadata från formulär → rent objekt
+function getInvoiceData() {
+  const tots=calcTotals(items, +g('f-discount').value||0, +g('f-discpct').value||0, g('f-rc').value==='1');
+  return {
+    company:g('f-company').value, addr:g('f-addr').value, phone:g('f-phone').value,
+    email:g('f-email').value, web:g('f-web').value, bgiro:g('f-bg').value,
+    orgnr:g('f-orgnr').value, vatnr:g('f-vatnr').value,
+    invno:g('f-invno').value, custno:g('f-custno').value,
+    date:g('f-date').value, due:g('f-due').value, terms:g('f-terms').value,
+    erref:g('f-erref').value, varref:g('f-varref').value,
+    ocr:g('f-ocr').value.trim()||g('f-invno').value,
+    type:g('f-type').value, status:g('f-status').value,
+    rc:g('f-rc').value==='1', reminvno:g('f-reminvno').value||'',
+    discount:+g('f-discount').value||0, discpct:+g('f-discpct').value||0,
+    currency:g('f-currency').value,
+    cName:g('c-name').value, cAddr:g('c-addr').value, cEmail:g('c-email').value,
+    freetext:g('f-freetext').value, notes:g('f-notes').value,
+    logoUrl:logoDataUrl, logoW:+g('logo-w').value, logoH:+g('logo-h').value,
+    items:JSON.parse(JSON.stringify(items)),
+    ...tots
+  };
+}
 
-function blockHTML(id, d) {
-  const company=g('f-company').value, addr=g('f-addr').value.replace(/\n/g,'<br>');
-  const phone=g('f-phone').value, email=g('f-email').value;
-  const web=g('f-web').value, bgiro=g('f-bg').value, orgnr=g('f-orgnr').value, vatnr=g('f-vatnr').value;
-  const invno=g('f-invno').value, custno=g('f-custno').value;
-  const date=g('f-date').value, due=g('f-due').value, terms=g('f-terms').value;
-  const erref=g('f-erref').value, varref=g('f-varref').value, reminvno=g('f-reminvno').value||'';
-  const cName=g('c-name').value, cAddr=g('c-addr').value.replace(/\n/g,'<br>');
-  const freetext=g('f-freetext').value, notes=g('f-notes').value;
-  const ocr=g('f-ocr').value.trim()||invno;
-  const {sub,totalDisc,vatRows,grand,rc}=calcTotals();
-  const lw=+g('logo-w').value, lh=+g('logo-h').value;
-  const bs=`font-family:${d.font};font-size:${d.fs}px;color:${d.text};line-height:1.55`;
+// ==========================================
+// ── LAYOUT CONFIG — presentationslager ──
+// ==========================================
 
-  if(id==='topbar') return `<div style="${bs};display:flex;align-items:center;justify-content:space-between;gap:20px;padding-bottom:14px;border-bottom:2px solid ${d.accent}">${logoDataUrl?`<img src="${logoDataUrl}" style="max-width:${lw}px;max-height:${lh}px;display:block">`:`<div style="width:70px;height:36px;border:1px dashed #ddd;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#ccc">Logotyp</div>`}<div style="text-align:right"><div style="font-size:${d.ts}px;font-weight:700;color:${d.text};text-transform:uppercase;letter-spacing:.06em">${invTypeLabel()}</div><div style="font-size:${d.fs}px;color:#999;margin-top:3px">Nr ${invno}${reminvno?' · Avser nr '+reminvno:''}</div></div></div>`;
+// Standardmall — kan alltid återställas
+const DEFAULT_LAYOUT = {
+  accent:'#2a6496', text:'#111111', bg:'#ffffff',
+  strip:'#f0f4f8', sumbox:'#f3f7fb', roweven:'#f7fafc',
+  font:'Arial,Helvetica,sans-serif', fs:11, ts:22,
+  pageW:794, pageH:1123,
+  blockState:  Object.fromEntries(blockDefs.map(b=>[b.id,{x:b.x,y:b.y,w:b.w,h:b.h}])),
+  blockVisible:Object.fromEntries(blockDefs.map(b=>[b.id,true]))
+};
 
-  if(id==='inforow') return `<div style="${bs};display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;padding:14px 0"><div><div style="font-size:${d.fs+2}px;font-weight:500;color:${d.accent};margin-bottom:4px">${company}</div><div style="font-size:${d.fs-1}px;color:#666;line-height:1.7">${addr}<br>${phone}<br>${email}</div></div><div><div style="font-size:${d.fs-1}px;text-transform:uppercase;letter-spacing:.08em;color:#bbb;margin-bottom:4px">Faktureras till</div><div style="font-weight:600;color:${d.text};text-transform:uppercase;margin-bottom:3px">${cName}</div><div style="font-size:${d.fs-1}px;color:#666;line-height:1.7">${cAddr}</div></div><div style="background:${d.sumbox};border:0.5px solid #d0dff0;border-radius:6px;padding:12px 14px;text-align:right"><div style="font-size:${d.fs-1}px;color:#888;margin-bottom:2px">Att betala</div><div style="font-size:${d.ts-2}px;font-weight:700;color:${d.text};margin-bottom:8px;white-space:nowrap">${fmtM(grand)}</div><div style="font-size:${d.fs-1}px;color:#888">Förfaller</div><div style="font-weight:600;font-size:${d.fs}px;color:${d.text}">${fmtDate(due)}</div></div></div>`;
+// Läser layoutinställningar från formulär + state → rent objekt
+function getLayoutConfig() {
+  return {
+    accent:g('c-accent').value, text:g('c-text').value, bg:g('c-bg').value,
+    strip:g('c-strip').value, sumbox:g('c-sumbox').value, roweven:g('c-roweven').value,
+    font:g('d-font').value, fs:+g('d-fontsize').value||11, ts:+g('d-titlesize').value||22,
+    pageW:+g('d-width').value||794, pageH:+g('d-height').value||1123,
+    blockState:JSON.parse(JSON.stringify(blockState)),
+    blockVisible:JSON.parse(JSON.stringify(blockVisible))
+  };
+}
+
+// Applicerar ett layoutConfig-objekt på formulär + state
+function applyLayoutConfig(L) {
+  if(L.accent)  g('c-accent').value=L.accent;
+  if(L.text)    g('c-text').value=L.text;
+  if(L.bg)      g('c-bg').value=L.bg;
+  if(L.strip)   g('c-strip').value=L.strip;
+  if(L.sumbox)  g('c-sumbox').value=L.sumbox;
+  if(L.roweven) g('c-roweven').value=L.roweven;
+  if(L.font)    g('d-font').value=L.font;
+  if(L.fs)      g('d-fontsize').value=L.fs;
+  if(L.ts)      g('d-titlesize').value=L.ts;
+  if(L.pageW)   g('d-width').value=L.pageW;
+  if(L.pageH)   g('d-height').value=L.pageH;
+  if(L.blockState)   blockState=JSON.parse(JSON.stringify(L.blockState));
+  if(L.blockVisible) blockVisible=JSON.parse(JSON.stringify(L.blockVisible));
+  resizeCanvas(); buildBlockToggles(); renderAll();
+}
+
+// Återställ till inbyggd standardmall
+function resetToDefaultLayout() {
+  if(!confirm('Återställa till standardlayout?')) return;
+  applyLayoutConfig(JSON.parse(JSON.stringify(DEFAULT_LAYOUT)));
+  pushHistory();
+}
+
+// ==========================================
+// ── RENDER ENGINE ──
+// ==========================================
+
+function invTypeLabel(type) {
+  return type==='reminder'?'Påminnelsefaktura':type==='credit'?'Kreditfaktura':'Faktura';
+}
+
+// Ren renderfunktion — tar invoiceData + layoutConfig, inga DOM-läsningar
+function blockHTML(id, inv, L) {
+  const fmt=n=>fmtM(n,inv.currency);
+  const addrHtml=inv.addr.replace(/\n/g,'<br>');
+  const cAddrHtml=inv.cAddr.replace(/\n/g,'<br>');
+  const bs=`font-family:${L.font};font-size:${L.fs}px;color:${L.text};line-height:1.55`;
+
+  if(id==='topbar') return `<div style="${bs};display:flex;align-items:center;justify-content:space-between;gap:20px;padding-bottom:14px;border-bottom:2px solid ${L.accent}">${inv.logoUrl?`<img src="${inv.logoUrl}" style="max-width:${inv.logoW}px;max-height:${inv.logoH}px;display:block">`:`<div style="width:70px;height:36px;border:1px dashed #ddd;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#ccc">Logotyp</div>`}<div style="text-align:right"><div style="font-size:${L.ts}px;font-weight:700;color:${L.text};text-transform:uppercase;letter-spacing:.06em">${invTypeLabel(inv.type)}</div><div style="font-size:${L.fs}px;color:#999;margin-top:3px">Nr ${inv.invno}${inv.reminvno?' · Avser nr '+inv.reminvno:''}</div></div></div>`;
+
+  if(id==='inforow') return `<div style="${bs};display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;padding:14px 0"><div><div style="font-size:${L.fs+2}px;font-weight:500;color:${L.accent};margin-bottom:4px">${inv.company}</div><div style="font-size:${L.fs-1}px;color:#666;line-height:1.7">${addrHtml}<br>${inv.phone}<br>${inv.email}</div></div><div><div style="font-size:${L.fs-1}px;text-transform:uppercase;letter-spacing:.08em;color:#bbb;margin-bottom:4px">Faktureras till</div><div style="font-weight:600;color:${L.text};text-transform:uppercase;margin-bottom:3px">${inv.cName}</div><div style="font-size:${L.fs-1}px;color:#666;line-height:1.7">${cAddrHtml}</div></div><div style="background:${L.sumbox};border:0.5px solid #d0dff0;border-radius:6px;padding:12px 14px;text-align:right"><div style="font-size:${L.fs-1}px;color:#888;margin-bottom:2px">Att betala</div><div style="font-size:${L.ts-2}px;font-weight:700;color:${L.text};margin-bottom:8px;white-space:nowrap">${fmt(inv.grand)}</div><div style="font-size:${L.fs-1}px;color:#888">Förfaller</div><div style="font-weight:600;font-size:${L.fs}px;color:${L.text}">${fmtDate(inv.due)}</div></div></div>`;
 
   if(id==='metastrip') {
-    const cells=[['Fakturanr',invno],['Fakturadatum',fmtDate(date)],['Förfallodatum',fmtDate(due)],['Betalningsvillkor',terms],['Valuta',g('f-currency').value],['OCR',ocr],...(erref?[['Er ref.',erref]]:[]),...(varref?[['Vår ref.',varref]]:[]),...(custno?[['Kundnr',custno]]:[])];
-    return `<div style="background:${d.strip};border-radius:5px;padding:10px 14px;display:flex;gap:20px;flex-wrap:wrap;font-family:${d.font}">${cells.map(([k,v])=>`<div><div style="font-size:${d.fs-2}px;text-transform:uppercase;letter-spacing:.07em;color:#aaa;margin-bottom:2px">${k}</div><div style="font-size:${d.fs}px;font-weight:600;color:${d.text}">${v}</div></div>`).join('')}</div>`;
+    const cells=[['Fakturanr',inv.invno],['Fakturadatum',fmtDate(inv.date)],['Förfallodatum',fmtDate(inv.due)],['Betalningsvillkor',inv.terms],['Valuta',inv.currency],['OCR',inv.ocr],...(inv.erref?[['Er ref.',inv.erref]]:[]),...(inv.varref?[['Vår ref.',inv.varref]]:[]),...(inv.custno?[['Kundnr',inv.custno]]:[])];
+    return `<div style="background:${L.strip};border-radius:5px;padding:10px 14px;display:flex;gap:20px;flex-wrap:wrap;font-family:${L.font}">${cells.map(([k,v])=>`<div><div style="font-size:${L.fs-2}px;text-transform:uppercase;letter-spacing:.07em;color:#aaa;margin-bottom:2px">${k}</div><div style="font-size:${L.fs}px;font-weight:600;color:${L.text}">${v}</div></div>`).join('')}</div>`;
   }
 
   if(id==='items') {
     let rows='', rowNum=1;
-    items.forEach((it,i)=>{
+    inv.items.forEach((it,i)=>{
       const lineNet=(it.price*(1-(it.disc||0)/100))*it.qty;
-      const bg=i%2===0?'#fff':d.roweven;
-      rows+=`<tr style="background:${bg}"><td style="padding:5px 4px;color:#bbb;font-size:${d.fs-1}px;width:18px">${rowNum++}</td><td style="padding:5px 4px;color:${d.text}">${it.desc||'–'}</td><td style="padding:5px 4px;color:#777;font-size:${d.fs-1}px">${it.note||''}</td><td style="padding:5px 4px;text-align:right;width:38px;color:${d.text}">${it.qty}</td><td style="padding:5px 4px;text-align:right;width:72px;color:${d.text}">${fmtM(it.price)}</td>${it.disc?`<td style="padding:5px 4px;text-align:right;color:#dc2626;width:36px">-${it.disc}%</td>`:`<td style="width:36px"></td>`}<td style="padding:5px 4px;text-align:right;width:36px;color:#777">${rc?'RC':it.vat+'%'}</td><td style="padding:5px 4px;text-align:right;width:78px;font-weight:500;color:${d.text}">${fmtM(lineNet)}</td></tr>`;
+      const bg=i%2===0?'#fff':L.roweven;
+      rows+=`<tr style="background:${bg}"><td style="padding:5px 4px;color:#bbb;font-size:${L.fs-1}px;width:18px">${rowNum++}</td><td style="padding:5px 4px;color:${L.text}">${it.desc||'–'}</td><td style="padding:5px 4px;color:#777;font-size:${L.fs-1}px">${it.note||''}</td><td style="padding:5px 4px;text-align:right;width:38px;color:${L.text}">${it.qty}</td><td style="padding:5px 4px;text-align:right;width:72px;color:${L.text}">${fmt(it.price)}</td>${it.disc?`<td style="padding:5px 4px;text-align:right;color:#dc2626;width:36px">-${it.disc}%</td>`:`<td style="width:36px"></td>`}<td style="padding:5px 4px;text-align:right;width:36px;color:#777">${inv.rc?'RC':it.vat+'%'}</td><td style="padding:5px 4px;text-align:right;width:78px;font-weight:500;color:${L.text}">${fmt(lineNet)}</td></tr>`;
     });
-    return `<table style="width:100%;border-collapse:collapse;font-family:${d.font};font-size:${d.fs}px;color:${d.text}"><thead><tr style="border-bottom:1.5px solid ${d.accent}"><th style="padding:5px 4px;text-align:left;color:${d.accent};font-size:${d.fs-1}px;font-weight:600">#</th><th style="padding:5px 4px;text-align:left;color:${d.accent};font-size:${d.fs-1}px;font-weight:600">Produkt / tjänst</th><th style="padding:5px 4px"></th><th style="padding:5px 4px;text-align:right;color:${d.accent};font-size:${d.fs-1}px;font-weight:600">Antal</th><th style="padding:5px 4px;text-align:right;color:${d.accent};font-size:${d.fs-1}px;font-weight:600">À-pris</th><th style="padding:5px 4px;text-align:right;color:${d.accent};font-size:${d.fs-1}px;font-weight:600">Rab.</th><th style="padding:5px 4px;text-align:right;color:${d.accent};font-size:${d.fs-1}px;font-weight:600">Moms</th><th style="padding:5px 4px;text-align:right;color:${d.accent};font-size:${d.fs-1}px;font-weight:600">Belopp</th></tr></thead><tbody>${rows}</tbody></table>`;
+    return `<table style="width:100%;border-collapse:collapse;font-family:${L.font};font-size:${L.fs}px;color:${L.text}"><thead><tr style="border-bottom:1.5px solid ${L.accent}"><th style="padding:5px 4px;text-align:left;color:${L.accent};font-size:${L.fs-1}px;font-weight:600">#</th><th style="padding:5px 4px;text-align:left;color:${L.accent};font-size:${L.fs-1}px;font-weight:600">Produkt / tjänst</th><th style="padding:5px 4px"></th><th style="padding:5px 4px;text-align:right;color:${L.accent};font-size:${L.fs-1}px;font-weight:600">Antal</th><th style="padding:5px 4px;text-align:right;color:${L.accent};font-size:${L.fs-1}px;font-weight:600">À-pris</th><th style="padding:5px 4px;text-align:right;color:${L.accent};font-size:${L.fs-1}px;font-weight:600">Rab.</th><th style="padding:5px 4px;text-align:right;color:${L.accent};font-size:${L.fs-1}px;font-weight:600">Moms</th><th style="padding:5px 4px;text-align:right;color:${L.accent};font-size:${L.fs-1}px;font-weight:600">Belopp</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   if(id==='totals') {
-    const vrows=rc?`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:${d.fs}px;color:#666"><span>Moms (omvänd skattskyldighet):</span><span>0,00</span></div>`:vatRows.map(r=>`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:${d.fs}px;color:#666"><span>Moms ${r.rate}% (på ${fmtM(r.base)}):</span><span>${fmtM(r.v)}</span></div>`).join('');
-    const discRow=totalDisc>0?`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:${d.fs}px;color:#dc2626"><span>Rabatt:</span><span>-${fmtM(totalDisc)}</span></div>`:'';
-    return `<div style="font-family:${d.font};color:${d.text}"><div style="display:flex;justify-content:space-between;padding:2px 0;font-size:${d.fs}px;color:#666"><span>Netto:</span><span>${fmtM(sub)}</span></div>${discRow}${vrows}<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:${d.fs}px;color:#ccc"><span>Öresutjämning:</span><span>0,00</span></div><div style="border-top:1.5px solid ${d.accent};margin-top:6px;padding-top:8px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:${d.fs+1}px;font-weight:600;color:${d.text}">Summa att betala</span><span style="font-size:${d.ts-4}px;font-weight:700;color:${d.accent}">${fmtM(grand)}</span></div>${rc?`<div style="font-size:${d.fs-1}px;color:#aaa;margin-top:6px">Omvänd skattskyldighet enl. 1 kap. 2 § ML.</div>`:''}</div>`;
+    const vrows=inv.rc?`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:${L.fs}px;color:#666"><span>Moms (omvänd skattskyldighet):</span><span>0,00</span></div>`:inv.vatRows.map(r=>`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:${L.fs}px;color:#666"><span>Moms ${r.rate}% (på ${fmt(r.base)}):</span><span>${fmt(r.v)}</span></div>`).join('');
+    const discRow=inv.totalDisc>0?`<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:${L.fs}px;color:#dc2626"><span>Rabatt:</span><span>-${fmt(inv.totalDisc)}</span></div>`:'';
+    return `<div style="font-family:${L.font};color:${L.text}"><div style="display:flex;justify-content:space-between;padding:2px 0;font-size:${L.fs}px;color:#666"><span>Netto:</span><span>${fmt(inv.sub)}</span></div>${discRow}${vrows}<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:${L.fs}px;color:#ccc"><span>Öresutjämning:</span><span>0,00</span></div><div style="border-top:1.5px solid ${L.accent};margin-top:6px;padding-top:8px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:${L.fs+1}px;font-weight:600;color:${L.text}">Summa att betala</span><span style="font-size:${L.ts-4}px;font-weight:700;color:${L.accent}">${fmt(inv.grand)}</span></div>${inv.rc?`<div style="font-size:${L.fs-1}px;color:#aaa;margin-top:6px">Omvänd skattskyldighet enl. 1 kap. 2 § ML.</div>`:''}</div>`;
   }
 
-  if(id==='footer') return `<div style="font-family:${d.font};font-size:${d.fs-1}px;color:#555;border-top:1px solid #e5e7eb;padding-top:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px"><div><div style="font-weight:600;color:${d.text};margin-bottom:3px;font-size:${d.fs}px">Adress</div>${company}<br>${addr}</div><div><div style="font-weight:600;color:${d.text};margin-bottom:3px;font-size:${d.fs}px">Kontakt</div>${phone}<br>${email}<br><strong>Bankgiro</strong> ${bgiro}</div><div style="text-align:right"><div style="font-weight:600;color:${d.text};margin-bottom:3px;font-size:${d.fs}px">Betalning</div><strong>OCR:</strong> ${ocr}<br><strong>Bankgiro:</strong> ${bgiro}<br><br>Org.nr: ${orgnr}<br>Momsreg.nr: ${vatnr}<br><span style="color:#bbb;font-size:${d.fs-1}px">Godkänd för F-skatt</span></div></div>`;
+  if(id==='footer') return `<div style="font-family:${L.font};font-size:${L.fs-1}px;color:#555;border-top:1px solid #e5e7eb;padding-top:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px"><div><div style="font-weight:600;color:${L.text};margin-bottom:3px;font-size:${L.fs}px">Adress</div>${inv.company}<br>${addrHtml}</div><div><div style="font-weight:600;color:${L.text};margin-bottom:3px;font-size:${L.fs}px">Kontakt</div>${inv.phone}<br>${inv.email}<br><strong>Bankgiro</strong> ${inv.bgiro}</div><div style="text-align:right"><div style="font-weight:600;color:${L.text};margin-bottom:3px;font-size:${L.fs}px">Betalning</div><strong>OCR:</strong> ${inv.ocr}<br><strong>Bankgiro:</strong> ${inv.bgiro}<br><br>Org.nr: ${inv.orgnr}<br>Momsreg.nr: ${inv.vatnr}<br><span style="color:#bbb;font-size:${L.fs-1}px">Godkänd för F-skatt</span></div></div>`;
 
-  if(id==='notes')    return `<div style="${bs};color:#aaa;font-size:${d.fs-1}px;font-style:italic">${notes}</div>`;
-  if(id==='freetext') return `<div style="${bs};font-size:${d.fs-1}px;color:#666">${freetext}</div>`;
+  if(id==='notes')    return `<div style="${bs};color:#aaa;font-size:${L.fs-1}px;font-style:italic">${inv.notes}</div>`;
+  if(id==='freetext') return `<div style="${bs};font-size:${L.fs-1}px;color:#666">${inv.freetext}</div>`;
   return '';
 }
 
-function renderAll() {
-  g('reminder-ref-row').style.display=g('f-type').value==='reminder'?'block':'none';
-  const d=getDesign(), wrap=g('invoice-wrap');
-  wrap.style.background=d.bg;
+// Kärn-renderfunktion — tar rena dataobjekt, inga DOM-läsningar
+function renderInvoice(inv, layout) {
+  const wrap=g('invoice-wrap');
+  wrap.style.background=layout.bg;
   wrap.querySelectorAll('.inv-block').forEach(el=>el.remove());
   blockDefs.forEach(b=>{
-    if(!blockVisible[b.id]) return;
-    const s=blockState[b.id];
+    if(!layout.blockVisible[b.id]) return;
+    const s=layout.blockState[b.id];
     const div=document.createElement('div');
     div.className='inv-block'; div.dataset.id=b.id;
     div.style.cssText=`left:${s.x}px;top:${s.y}px;width:${s.w}px;min-height:${s.h}px`;
-    div.innerHTML=`<div class="block-hint">${b.label}</div>${blockHTML(b.id,d)}<div class="resize-handle"></div>`;
+    div.innerHTML=`<div class="block-hint">${b.label}</div>${blockHTML(b.id,inv,layout)}<div class="resize-handle"></div>`;
     wrap.appendChild(div);
     makeDraggable(div,b.id);
     makeResizable(div.querySelector('.resize-handle'),b.id);
@@ -629,6 +701,14 @@ function renderAll() {
     });
   });
 }
+
+// Bekvämlighetsomslag: läser aktuellt DOM-tillstånd och renderar
+function renderAll() {
+  g('reminder-ref-row').style.display=g('f-type').value==='reminder'?'block':'none';
+  renderInvoice(getInvoiceData(), getLayoutConfig());
+}
+
+function resizeCanvas() { const w=+g('d-width').value||794,h=+g('d-height').value||1123; g('invoice-wrap').style.width=w+'px'; g('invoice-wrap').style.height=h+'px'; drawSnapGrid(); }
 
 function makeDraggable(el,id) {
   el.addEventListener('mousedown',e=>{
@@ -648,7 +728,7 @@ function makeResizable(handle,id) {
     document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
   });
 }
-function resetLayout(){blockDefs.forEach(b=>{blockState[b.id]={x:b.x,y:b.y,w:b.w,h:b.h};});pushHistory();renderAll();}
+function resetLayout() { applyLayoutConfig(JSON.parse(JSON.stringify(DEFAULT_LAYOUT))); pushHistory(); }
 
 function showPreview() {
   const w=+g('d-width').value||794, avail=Math.min(window.innerWidth*.9,860)-32, scale=avail/w;
@@ -662,118 +742,86 @@ function showPreview() {
 }
 function hidePreview(){g('preview-overlay').classList.remove('show');}
 
-function getState() {
-  return {
-    fields:{company:g('f-company').value,addr:g('f-addr').value,phone:g('f-phone').value,email:g('f-email').value,web:g('f-web').value,bg:g('f-bg').value,orgnr:g('f-orgnr').value,vatnr:g('f-vatnr').value,invno:g('f-invno').value,custno:g('f-custno').value,date:g('f-date').value,due:g('f-due').value,terms:g('f-terms').value,erref:g('f-erref').value,varref:g('f-varref').value,cname:g('c-name').value,caddr:g('c-addr').value,cemail:g('c-email').value,freetext:g('f-freetext').value,notes:g('f-notes').value,currency:g('f-currency').value,type:g('f-type').value,status:g('f-status').value,rc:g('f-rc').value,reminvno:g('f-reminvno').value||'',discount:g('f-discount').value,discpct:g('f-discpct').value,ocr:g('f-ocr').value},
-    items:JSON.parse(JSON.stringify(items)),
-    blockState:JSON.parse(JSON.stringify(blockState)),
-    blockVisible:JSON.parse(JSON.stringify(blockVisible)),
-    design:{accent:g('c-accent').value,text:g('c-text').value,cbg:g('c-bg').value,strip:g('c-strip').value,sumbox:g('c-sumbox').value,roweven:g('c-roweven').value,font:g('d-font').value,fs:g('d-fontsize').value,ts:g('d-titlesize').value,dw:g('d-width').value,dh:g('d-height').value}
-  };
-}
-function applyState(st) {
-  const f=st.fields||{};
-  ['company','addr','phone','email','web','bg','orgnr','vatnr','invno','custno','date','due','terms','erref','varref','freetext','notes','discount','discpct','ocr'].forEach(k=>{if(g('f-'+k))g('f-'+k).value=f[k]||'';});
-  g('c-name').value=f.cname||''; g('c-addr').value=f.caddr||''; g('c-email').value=f.cemail||'';
-  ['currency','type','status','rc','reminvno'].forEach(k=>{if(g('f-'+k)&&f[k]!==undefined)g('f-'+k).value=f[k];});
-  items=JSON.parse(JSON.stringify(st.items||[]));
-  if(st.blockState) blockState=JSON.parse(JSON.stringify(st.blockState));
-  if(st.blockVisible) blockVisible=JSON.parse(JSON.stringify(st.blockVisible));
-  const des=st.design||{};
-  if(des.accent) g('c-accent').value=des.accent;
-  if(des.text)   g('c-text').value=des.text;
-  if(des.cbg)    g('c-bg').value=des.cbg;
-  if(des.strip)  g('c-strip').value=des.strip;
-  if(des.sumbox) g('c-sumbox').value=des.sumbox;
-  if(des.roweven)g('c-roweven').value=des.roweven;
-  if(des.font)   g('d-font').value=des.font;
-  if(des.fs)     g('d-fontsize').value=des.fs;
-  if(des.ts)     g('d-titlesize').value=des.ts;
-  if(des.dw)     g('d-width').value=des.dw;
-  if(des.dh)     g('d-height').value=des.dh;
-  resizeCanvas(); rebuildSidebarItems(); buildBlockToggles(); renderAll();
-}
+// ==========================================
+// ── MALLSYSTEM (layoutConfig-baserat) ──
+// ==========================================
 
-async function saveInvoice() {
-  const name=g('save-name').value.trim()||g('c-name').value||'Faktura '+new Date().toLocaleDateString('sv-SE');
-  const{grand}=calcTotals();
+function saveMall() {
+  const name=prompt('Mallnamn:'); if(!name)return;
   try{
-    await window.storage.set('inv:'+Date.now(),JSON.stringify({name,date:new Date().toISOString(),status:g('f-status').value,grand,currency:g('f-currency').value,state:getState()}));
-    g('save-name').value='';
-    g('f-invno').value=await nextInvNo();
-    renderAll(); renderSavedList(); renderDashboard();
-  }catch(e){alert('Kunde inte spara: '+e.message);}
-}
-async function saveInvoiceQuick(){g('save-name').value=g('c-name').value||'Utkast';await saveInvoice();}
-
-async function renderDashboard() {
-  try{
-    const res=await window.storage.list('inv:'); const keys=(res&&res.keys)||[];
-    const entries=await Promise.all(keys.map(async k=>{try{const r=await window.storage.get(k);return JSON.parse(r.value);}catch{return null;}}));
-    const valid=entries.filter(Boolean);
-    const total=valid.reduce((s,e)=>s+(e.grand||0),0);
-    const paid=valid.filter(e=>e.status==='paid').reduce((s,e)=>s+(e.grand||0),0);
-    const overdue=valid.filter(e=>e.status==='overdue').length;
-    g('dashboard').innerHTML=`<div class="dash-card"><div class="num">${valid.length}</div><div class="lbl">Fakturor</div></div><div class="dash-card"><div class="num">${total.toLocaleString('sv-SE',{maximumFractionDigits:0})}</div><div class="lbl">Totalt</div></div><div class="dash-card green"><div class="num">${paid.toLocaleString('sv-SE',{maximumFractionDigits:0})}</div><div class="lbl">Betalt</div></div><div class="dash-card red"><div class="num">${overdue}</div><div class="lbl">Förfallna</div></div>`;
-  }catch{g('dashboard').innerHTML='';}
+    const m=JSON.parse(localStorage.getItem('mallar')||'[]');
+    m.push({id:Date.now(), name, layout:getLayoutConfig()});
+    localStorage.setItem('mallar',JSON.stringify(m));
+    renderMallList();
+  }catch(e){alert(e.message);}
 }
 
-const statusLabels={unpaid:'Obetald',paid:'Betald',overdue:'Förfallen'};
-const statusClass={unpaid:'s-unpaid',paid:'s-paid',overdue:'s-overdue'};
-
-async function renderSavedList() {
-  const list=g('inv-list'); list.innerHTML='<div style="font-size:11px;color:var(--g400)">Laddar…</div>';
-  const filter=g('filter-status').value;
-  try{
-    const res=await window.storage.list('inv:'); const keys=(res&&res.keys)||[];
-    if(!keys.length){list.innerHTML='<div class="empty-state">Inga sparade fakturor.</div>';return;}
-    list.innerHTML='';
-    const entries=await Promise.all(keys.map(async k=>{try{const r=await window.storage.get(k);return{k,d:JSON.parse(r.value)};}catch{return null;}}));
-    entries.filter(e=>e&&(!filter||e.d.status===filter)).sort((a,b)=>new Date(b.d.date)-new Date(a.d.date)).forEach(({k,d})=>{
-      const el=document.createElement('div'); el.className='inv-item';
-      const dt=new Date(d.date).toLocaleDateString('sv-SE');
-      el.innerHTML=`<div class="inv-item-row"><div class="inv-item-title">${d.name}</div><div class="inv-item-actions"><button class="icon-btn" onclick="makeReminder('${k}',event)" title="Påminnelse">🔔</button><button class="icon-btn" onclick="toggleStatus('${k}',event)" title="Växla betald">✓</button><button class="del-btn" onclick="deleteInvoice('${k}',event)">✕</button></div></div><div class="inv-item-sub">${dt} · ${(d.grand||0).toLocaleString('sv-SE',{maximumFractionDigits:0})} ${d.currency||'SEK'} <span class="status-badge ${statusClass[d.status]||'s-unpaid'}">${statusLabels[d.status]||d.status}</span></div>`;
-      el.addEventListener('click',async e=>{if(e.target.closest('.inv-item-actions'))return;applyState(d.state);switchTab('data');});
-      list.appendChild(el);
-    });
-  }catch{list.innerHTML='<div class="empty-state">Kunde inte ladda.</div>';}
-}
-
-async function toggleStatus(key,e){e.stopPropagation();try{const r=await window.storage.get(key);const d=JSON.parse(r.value);d.status=d.status==='paid'?'unpaid':'paid';d.state.fields.status=d.status;await window.storage.set(key,JSON.stringify(d));renderSavedList();renderDashboard();}catch{}}
-async function deleteInvoice(key,e){e.stopPropagation();try{await window.storage.delete(key);renderSavedList();renderDashboard();}catch{}}
-async function makeReminder(key,e){
-  e.stopPropagation();
-  try{const r=await window.storage.get(key);const d=JSON.parse(r.value);applyState(d.state);g('f-type').value='reminder';g('f-reminvno').value=d.state.fields.invno;const t=new Date();g('f-date').value=t.toISOString().split('T')[0];const du=new Date(t);du.setDate(du.getDate()+10);g('f-due').value=du.toISOString().split('T')[0];g('f-status').value='unpaid';renderAll();switchTab('data');}catch{alert('Fel.');}
-}
-
-// ── MALLAR (localStorage) ──
-function getDesignObj(){return{...getDesign(),cbg:g('c-bg').value,strip:g('c-strip').value,fs:g('d-fontsize').value,ts:g('d-titlesize').value,dw:g('d-width').value,dh:g('d-height').value,blockState:JSON.parse(JSON.stringify(blockState)),blockVisible:JSON.parse(JSON.stringify(blockVisible))};}
-function saveMall(){const name=prompt('Mallnamn:');if(!name)return;try{const m=JSON.parse(localStorage.getItem('mallar')||'[]');m.push({id:Date.now(),name,design:getDesignObj()});localStorage.setItem('mallar',JSON.stringify(m));renderMallList();}catch(e){alert(e.message);}}
-function renderMallList(){
+function renderMallList() {
   const c=g('mall-list'); c.innerHTML='';
-  try{const m=JSON.parse(localStorage.getItem('mallar')||'[]');
-    if(!m.length){c.innerHTML='<div style="font-size:11px;color:var(--g400);margin-bottom:6px">Inga mallar.</div>';return;}
-    m.forEach(({id,name,design:des})=>{
+  try{
+    const m=JSON.parse(localStorage.getItem('mallar')||'[]');
+    if(!m.length){c.innerHTML='<div style="font-size:11px;color:var(--g400);margin-bottom:6px">Inga sparade mallar.</div>';return;}
+    m.forEach(({id,name})=>{
       const row=document.createElement('div');
-      row.style.cssText='display:flex;gap:6px;margin-bottom:6px;align-items:center;background:var(--g50);border:1px solid var(--g100);border-radius:8px;padding:7px 10px';
-      row.innerHTML=`<div style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:var(--g800)">${name}</div><button class="icon-btn" onclick="applyMall(${id})" title="Använd">✓</button><button class="del-btn" onclick="deleteMall(${id})">✕</button>`;
+      row.style.cssText='display:flex;gap:4px;margin-bottom:6px;align-items:center;background:var(--g50);border:1px solid var(--g100);border-radius:8px;padding:7px 10px';
+      row.innerHTML=`<div style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:var(--g800)">${name}</div><button class="icon-btn" onclick="applyMall(${id})" title="Använd">✓</button><button class="icon-btn" onclick="exportMall(${id})" title="Exportera JSON">↓</button><button class="del-btn" onclick="deleteMall(${id})">✕</button>`;
       c.appendChild(row);
     });
   }catch{}
 }
-function applyMall(id){
-  try{const m=JSON.parse(localStorage.getItem('mallar')||'[]');const des=(m.find(x=>x.id===id)||{}).design||{};
-    if(des.accent)g('c-accent').value=des.accent; if(des.text)g('c-text').value=des.text;
-    g('c-bg').value=des.cbg||'#fff'; if(des.strip)g('c-strip').value=des.strip;
-    if(des.sumbox)g('c-sumbox').value=des.sumbox; if(des.roweven)g('c-roweven').value=des.roweven;
-    if(des.font)g('d-font').value=des.font; if(des.fs)g('d-fontsize').value=des.fs;
-    if(des.ts)g('d-titlesize').value=des.ts; if(des.dw)g('d-width').value=des.dw; if(des.dh)g('d-height').value=des.dh;
-    if(des.blockState)blockState=JSON.parse(JSON.stringify(des.blockState));
-    if(des.blockVisible)blockVisible=JSON.parse(JSON.stringify(des.blockVisible));
-    resizeCanvas();buildBlockToggles();onChange();
-  }catch{alert('Kunde inte ladda.');}
+
+function applyMall(id) {
+  try{
+    const m=JSON.parse(localStorage.getItem('mallar')||'[]');
+    const entry=m.find(x=>x.id===id)||{};
+    const L=entry.layout||entry.design||{};
+    if(!L.pageW && L.dw) L.pageW=+L.dw;
+    if(!L.pageH && L.dh) L.pageH=+L.dh;
+    if(L.cbg)  L.bg=L.cbg;
+    applyLayoutConfig(L);
+  }catch{alert('Kunde inte ladda mallen.');}
 }
-function deleteMall(id){try{const m=JSON.parse(localStorage.getItem('mallar')||'[]');localStorage.setItem('mallar',JSON.stringify(m.filter(x=>x.id!==id)));renderMallList();}catch{}}
+
+function exportMall(id) {
+  try{
+    const m=JSON.parse(localStorage.getItem('mallar')||'[]');
+    const entry=m.find(x=>x.id===id); if(!entry)return;
+    const json=JSON.stringify({fakturaskapareMall:true,...entry},null,2);
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([json],{type:'application/json'}));
+    a.download=(entry.name||'mall').replace(/\s+/g,'_')+'.json';
+    a.click();
+  }catch(e){alert(e.message);}
+}
+
+function importMall() {
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='.json';
+  inp.onchange=e=>{
+    const f=e.target.files[0]; if(!f)return;
+    const r=new FileReader();
+    r.onload=ev=>{
+      try{
+        const data=JSON.parse(ev.target.result);
+        if(!data.fakturaskapareMall) throw new Error('Inte en giltig mallfil.');
+        const m=JSON.parse(localStorage.getItem('mallar')||'[]');
+        m.push({...data, id:Date.now()});
+        localStorage.setItem('mallar',JSON.stringify(m));
+        renderMallList();
+        alert('Mall importerad: '+data.name);
+      }catch(ex){alert('Importfel: '+ex.message);}
+    };
+    r.readAsText(f);
+  };
+  inp.click();
+}
+
+function deleteMall(id) {
+  try{
+    const m=JSON.parse(localStorage.getItem('mallar')||'[]');
+    localStorage.setItem('mallar',JSON.stringify(m.filter(x=>x.id!==id)));
+    renderMallList();
+  }catch{}
+}
 
 async function savePDF(){
   const el=g('invoice-wrap'), btn=g('pdf-btn');
@@ -831,3 +879,4 @@ pushHistory();
 renderAll();
 checkOnboard();
 </script>
+
